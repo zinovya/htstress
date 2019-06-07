@@ -85,6 +85,7 @@ volatile uint64_t num_requests = 0;
 volatile uint64_t max_requests = 0;
 volatile uint64_t good_requests = 0;
 volatile uint64_t bad_requests = 0;
+volatile uint64_t socket_errors = 0;
 volatile uint64_t in_bytes = 0;
 volatile uint64_t out_bytes = 0;
 
@@ -206,12 +207,25 @@ static void* worker(void* arg)
 
 			if (evts[n].events & EPOLLERR) {
 				/* normally this should not happen */
+				static unsigned int number_of_errors_logged = 0;
 				int       error = 0;
 				socklen_t errlen = sizeof(error);
+				number_of_errors_logged += 1;
 				if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&error, &errlen) == 0) {
 					fprintf(stderr, "error = %s\n", strerror(error));
 				}
-				exit(1);
+				if (number_of_errors_logged%100==0)
+				{
+					fprintf(stderr, "EPOLLERR caused by unknown error\n");
+				}
+				__sync_fetch_and_add(&socket_errors, 1);
+				close(ec->fd);
+				if (num_requests > max_requests)
+				{
+					continue;
+				}
+				init_conn(efd, ec);
+				continue;
 			}
 
 			if (evts[n].events & EPOLLHUP) {
@@ -534,12 +548,14 @@ int main(int argc, char* argv[])
 			"requests:      %"PRIu64"\n"
 			"good requests: %"PRIu64" [%d%%]\n"
 			"bad requests:  %"PRIu64" [%d%%]\n"
+			"socker errors: %"PRIu64" [%d%%]\n"
 			"seconds:       %.3f\n"
 			"requests/sec:  %.3f\n"
 			"\n",
 			num_requests,
 			good_requests, (int)(num_requests ? good_requests * 100 / num_requests : 0),
 			bad_requests, (int)(num_requests ? bad_requests * 100 / num_requests: 0),
+			socket_errors, (int)(num_requests ? socket_errors * 100 / num_requests: 0),
 			delta,
 			delta > 0
 				? max_requests / delta
